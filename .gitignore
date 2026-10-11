@@ -1,0 +1,13 @@
+node_modules/
+*.log
+.env
+.env.*
+
+# generated images
+codex-img-*.png
+out/
+*.tmp
+
+# never commit local credentials if anyone copies one in by accident
+auth.json
+.codex/

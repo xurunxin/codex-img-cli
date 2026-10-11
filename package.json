@@ -1,0 +1,28 @@
+{
+  "name": "codex-img-cli",
+  "version": "0.1.0",
+  "description": "Image generation/editing CLI that reuses the local Codex (ChatGPT) subscription credentials.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "codex-img": "bin/codex-img.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "keywords": [
+    "codex",
+    "chatgpt",
+    "image-generation",
+    "cli",
+    "mcp"
+  ]
+}
