@@ -39,24 +39,48 @@ function buildHeaders(creds) {
   return headers;
 }
 
-async function postImages(op, payload, { baseUrl, allowRefresh, timeoutMs }) {
+/**
+ * Compose a timeout signal with an optional caller-supplied signal.
+ *
+ * A server that lets users cancel a queued/running generation needs to abort the
+ * in-flight request from the outside. The timeout controller alone cannot express
+ * that, so the two are merged rather than one replacing the other.
+ *
+ * Abort reasons matter here: a timeout and a user cancel produce the same
+ * `AbortError` class, and "user hit cancel" is not a failure worth retrying or
+ * surfacing as a red error. Each path aborts with a distinguishable reason.
+ */
+function withTimeout(timeoutMs, signal) {
+  const controller = new AbortController();
+  const reason = new Error(`Image request timed out after ${timeoutMs}ms`);
+  const timer = setTimeout(() => controller.abort(reason), timeoutMs);
+  if (timer.unref) timer.unref();
+  return {
+    signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
+    dispose() {
+      clearTimeout(timer);
+    },
+  };
+}
+
+async function postImages(op, payload, { baseUrl, allowRefresh, timeoutMs, signal }) {
   const url = `${baseUrl || CODEX_API_BASE}/images/${op}`;
 
   const attempt = async () => {
     const creds = await resolveCredentials({ refresh: allowRefresh });
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const scoped = withTimeout(timeoutMs, signal);
+    if (signal?.aborted) scoped.dispose();
     try {
       const res = await fetch(url, {
         method: 'POST',
         headers: buildHeaders(creds),
         body: JSON.stringify(payload),
-        signal: controller.signal,
+        signal: scoped.signal,
       });
       const text = await res.text();
       return { res, text, creds };
     } finally {
-      clearTimeout(timer);
+      scoped.dispose();
     }
   };
 
@@ -102,7 +126,8 @@ function extractErrorMessage(text) {
 }
 
 function normalizeResult(data, endpoint) {
-  const first = data.data[0];
+  const items = data.data;
+  const first = items[0];
   return {
     endpoint,
     b64: first.b64_json,
@@ -112,6 +137,14 @@ function normalizeResult(data, endpoint) {
     quality: data.quality ?? null,
     outputFormat: data.output_format ?? null,
     usage: data.usage ?? null,
+    // n > 1 returns several images. `b64` stays the first one so existing
+    // callers (--out writes a single file) keep working, while callers that can
+    // use them all read this instead of re-requesting.
+    count: items.length,
+    images: items.map((it) => ({
+      b64: it.b64_json,
+      generationId: it.generation_id ?? null,
+    })),
   };
 }
 
@@ -125,6 +158,7 @@ export async function generateImage({
   baseUrl,
   allowRefresh = true,
   timeoutMs = 300000,
+  signal,
 }) {
   if (!prompt) throw new Error('A prompt is required.');
   const payload = {
@@ -140,6 +174,7 @@ export async function generateImage({
     baseUrl,
     allowRefresh,
     timeoutMs,
+    signal,
   });
   return normalizeResult(response, 'generations');
 }
@@ -154,6 +189,7 @@ export async function editImage({
   baseUrl,
   allowRefresh = true,
   timeoutMs = 300000,
+  signal,
 }) {
   if (!prompt) throw new Error('A prompt is required.');
   if (!Array.isArray(images) || images.length === 0) {
@@ -180,6 +216,7 @@ export async function editImage({
     baseUrl,
     allowRefresh,
     timeoutMs,
+    signal,
   });
   return normalizeResult(response, 'edits');
 }

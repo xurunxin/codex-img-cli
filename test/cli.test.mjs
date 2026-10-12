@@ -6,7 +6,8 @@ import path from 'node:path';
 
 import { parseArgs, USAGE } from '../src/cli.mjs';
 import { decodeJwtExp, decodeJwtClaims } from '../src/auth.mjs';
-import { fileToDataUrl } from '../src/client.mjs';
+import { fileToDataUrl, generateImage } from '../src/client.mjs';
+import http from 'node:http';
 
 function makeJwt(payload) {
   const enc = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
@@ -66,4 +67,78 @@ test('USAGE documents every subcommand', () => {
   for (const cmd of ['auth', 'gen', 'edit', 'models', 'mcp']) {
     assert.ok(USAGE.includes(cmd), `USAGE should mention ${cmd}`);
   }
+});
+
+/**
+ * A fake Codex home whose access_token is an opaque string, not a JWT.
+ * decodeJwtExp then returns null, so resolveCredentials does not try to refresh
+ * and these tests never touch auth.openai.com.
+ */
+function withFakeCodexHome(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-home-'));
+  fs.writeFileSync(
+    path.join(dir, 'auth.json'),
+    JSON.stringify({ tokens: { access_token: 'opaque-not-a-jwt', account_id: 'acct_test' } }),
+  );
+  const prev = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = dir;
+  t.after(() => {
+    if (prev === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = prev;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  return dir;
+}
+
+test('an externally aborted signal cancels the request and surfaces its own reason', async (t) => {
+  withFakeCodexHome(t);
+  // Abort before the call: nothing should reach the network at all.
+  const ac = new AbortController();
+  ac.abort(new Error('user canceled'));
+  await assert.rejects(
+    () => generateImage({ prompt: 'x', signal: ac.signal, allowRefresh: false }),
+    /user canceled/,
+  );
+});
+
+test('a caller-supplied signal aborts a request already in flight', async (t) => {
+  withFakeCodexHome(t);
+  // A server that accepts the connection and never answers — the only way to
+  // exercise abort *during* a request without a real network call.
+  let sawRequest = false;
+  const server = http.createServer((_req, _res) => { sawRequest = true; });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  t.after(() => new Promise((r) => server.close(r)));
+
+  const ac = new AbortController();
+  const pending = generateImage({
+    prompt: 'x',
+    baseUrl: `http://127.0.0.1:${server.address().port}`,
+    signal: ac.signal,
+    allowRefresh: false,
+    timeoutMs: 10_000,
+  });
+  await new Promise((r) => setTimeout(r, 80));
+  assert.ok(sawRequest, 'request should have reached the server before cancelling');
+  ac.abort(new Error('user canceled'));
+
+  // Must be the caller's reason, not a timeout — the server distinguishes the two.
+  await assert.rejects(pending, /user canceled/);
+});
+
+test('a timeout is reported as a timeout, distinct from a caller cancel', async (t) => {
+  withFakeCodexHome(t);
+  const server = http.createServer((_req, _res) => {});
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  t.after(() => new Promise((r) => server.close(r)));
+
+  await assert.rejects(
+    () => generateImage({
+      prompt: 'x',
+      baseUrl: `http://127.0.0.1:${server.address().port}`,
+      allowRefresh: false,
+      timeoutMs: 120,
+    }),
+    /timed out after 120ms/,
+  );
 });
