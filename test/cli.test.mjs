@@ -207,7 +207,14 @@ test('a caller-supplied signal aborts a request already in flight', async (t) =>
     allowRefresh: false,
     timeoutMs: 10_000,
   });
-  await new Promise((r) => setTimeout(r, 80));
+
+  // Wait for the request to actually arrive instead of guessing a delay: on a
+  // cold Windows runner the socket setup can take longer than a fixed sleep,
+  // and cancelling before the request is sent is a different test entirely.
+  const deadline = Date.now() + 5000;
+  while (!sawRequest && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 10));
+  }
   assert.ok(sawRequest, 'request should have reached the server before cancelling');
   ac.abort(new Error('user canceled'));
 
