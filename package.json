@@ -1,6 +1,6 @@
 {
   "name": "codex-img-cli",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Reuse your Codex/ChatGPT subscription to give any agent GPT-Image generation and editing, as a CLI and an MCP stdio server.",
   "type": "module",
   "license": "MIT",
@@ -19,6 +19,7 @@
   "files": [
     "bin",
     "src",
+    "scripts/cleanup-credentials.mjs",
     "README.md",
     "README.zh-CN.md",
     "LICENSE",
@@ -26,6 +27,7 @@
   ],
   "scripts": {
     "test": "node --test",
+    "preuninstall": "node scripts/cleanup-credentials.mjs",
     "prepublishOnly": "npm test"
   },
   "publishConfig": {

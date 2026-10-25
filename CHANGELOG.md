@@ -5,6 +5,32 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-10-25
+
+### Added
+
+- `codex-img login` — sign in with a ChatGPT subscription, for machines that
+  have no `codex login`. Two flows, both matching the `openai/codex` reference
+  implementation: a browser flow with a local loopback callback on
+  `127.0.0.1:1455` (fallback `1457`), and `--device` for the device code flow
+  that works over SSH, in containers and on headless machines.
+- `codex-img logout` — remove the credentials this tool manages. The Codex
+  login in `~/.codex` is never touched.
+- `codex-img auth` now reports which credential store is in use
+  (`managed by codex-img` or `codex login (~/.codex)`).
+
+### Changed
+
+- The credentials this tool manages now live in `<package>/.codex-img/auth.json`
+  — inside the package's own install directory — instead of a directory in the
+  home folder. **Uninstalling the package therefore removes the credentials
+  with it, and no token is left behind on the machine.**
+  npm 11 has no uninstall lifecycle hook (its arborist does not implement
+  `preuninstall`/`postuninstall`), so the directory layout is what makes that
+  guarantee real. `CODEX_IMG_HOME` overrides the location.
+- Reinstalling the package, or switching Node versions when it is installed
+  globally, means signing in again.
+
 ## [1.0.0] - 2026-10-25
 
 First public release.

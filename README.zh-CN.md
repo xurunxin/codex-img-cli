@@ -50,6 +50,34 @@ Content-Type: application/json
 `OPENAI_API_KEY`**。access token 临近过期时，用同一份文件里的 `refresh_token`
 自动续期并原子写回（临时文件 + rename），所以 Codex CLI 和本工具共用一次登录即可。
 
+## 登录
+
+本机已经跑过 `codex login`？**什么都不用做** —— 本工具会直接复用
+`~/.codex/auth.json`，并替你续期。
+
+没有 Codex 登录？那就用本工具自己登录：
+
+```bash
+codex-img login            # 浏览器流程
+codex-img login --device   # 设备码流程，适合 SSH / 容器 / 无桌面环境
+```
+
+凭据写在 **`<包目录>/.codex-img/auth.json`**，也就是工具自己的安装目录里。两个后果：
+
+- **卸载包 = 凭据一起消失**，机器上不会残留 token。npm 11 根本没有卸载生命周期
+  钩子（它的 arborist 压根没实现 `preuninstall`/`postuninstall`），所以这个保证是靠
+  目录布局真正做到的，而不是一句承诺。
+- 重装包、或全局安装时切换 Node 版本，需要重新登录。想把凭据放在别处，
+  设置 `CODEX_IMG_HOME` 即可。
+
+`~/.codex` 里的 Codex 登录**永远不会被覆盖**。两者都在时，本工具管理的凭据优先；
+`codex-img logout` 会删掉它并回退到 Codex 登录。
+
+```bash
+codex-img logout           # 删除本工具管理的凭据
+codex-img auth             # 看当前用的是哪一份
+```
+
 ## 安装
 
 ```bash
@@ -99,6 +127,8 @@ codex-img edit --image cabin.png \
 | 命令 | 作用 |
 |---|---|
 | `codex-img auth` | 看认证状态——不发起网络请求 |
+| `codex-img login` | 用 ChatGPT 订阅登录（不需要先有 Codex 登录） |
+| `codex-img logout` | 删除本工具管理的凭据 |
 | `codex-img gen` | 按文字提示生成图片 |
 | `codex-img edit` | 按文字指令编辑已有图片 |
 | `codex-img models` | 探针：端点到底认不认 model 字段 |
@@ -208,7 +238,8 @@ OpenAI 在 2026-09-08 发布了 **GPT-Image-2.5**，API 侧拆成 `gpt-image-2.5
 
 ## 前置条件与限制
 
-- 需要 ChatGPT 订阅，并在同一台机器上跑过 `codex login`。
+- 需要 ChatGPT 订阅，并且本机要么跑过 `codex login`，要么自己执行过一次
+  `codex-img login`。
 - 这里调用的是**未公开的内部端点**，不在 OpenAI 开发者文档内，随时可能变更或停用。
 - 用订阅凭据跑非官方客户端**违反 OpenAI 服务条款**。自用请自行评估风险；不要用于多账号分发或转售。
 - 生图走的是**独立于对话的配额池**（`openai/codex` 源码中对应 `limit_id == "image_gen"`）。
@@ -231,8 +262,11 @@ src/cli.mjs         参数解析与命令分发
 src/help.mjs        命令注册表与全部帮助文本
 src/client.mjs      端点调用、base64 载荷、文件落盘
 src/auth.mjs        凭据文件、token 续期、原子写回
+src/credentials.mjs 本工具管理的凭据存储
+src/login.mjs       OAuth 登录（浏览器流 + 设备码流）
 src/mcp.mjs         MCP stdio 服务端与工具 schema
 src/version.mjs     版本号，从 package.json 读取
+scripts/cleanup-credentials.mjs   卸载时清理凭据
 ```
 
 CI 在 Linux / macOS / Windows 上跑 Node 20、22、24。

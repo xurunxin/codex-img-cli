@@ -1,8 +1,16 @@
 import path from 'node:path';
 
 import { DEFAULT_MODEL, writeBase64ToFile } from './client.mjs';
-import { authFilePath, decodeJwtClaims, decodeJwtExp, readAuthFile } from './auth.mjs';
+import {
+  authFilePath,
+  authSource,
+  decodeJwtClaims,
+  decodeJwtExp,
+  effectiveAuthPath,
+  readAuthFile,
+} from './auth.mjs';
 import { COMMANDS, USAGE, findCommand, helpFor } from './help.mjs';
+import { managedAuthPath, managedHome, removeManagedAuth } from './credentials.mjs';
 import { version } from './version.mjs';
 
 /**
@@ -12,7 +20,15 @@ import { version } from './version.mjs';
  * that argument did not start with `--` — `--transparent out.png` would set
  * the background to "out.png" instead of writing the file.
  */
-const BOOLEAN_FLAGS = new Set(['help', 'version', 'json', 'no-refresh', 'transparent']);
+const BOOLEAN_FLAGS = new Set([
+  'help',
+  'version',
+  'json',
+  'no-refresh',
+  'transparent',
+  'device',
+  'no-browser',
+]);
 
 function parseArgs(argv) {
   const opts = { _: [] };
@@ -147,8 +163,13 @@ async function cmdAuth(opts) {
   const exp = decodeJwtExp(access);
   const claims = decodeJwtClaims(access);
   const nowSec = Math.floor(Date.now() / 1000);
+  const source = authSource();
 
   const info = {
+    source,
+    authFile: effectiveAuthPath(),
+    managedAuthFile: managedAuthPath(),
+    codexAuthFile: authFilePath(),
     authMode: auth.auth_mode ?? null,
     accountId: auth.tokens.account_id ?? null,
     expiresAt: exp ? new Date(exp * 1000).toISOString() : null,
@@ -158,7 +179,6 @@ async function cmdAuth(opts) {
     audience: claims?.aud ?? null,
     lastRefresh: auth.last_refresh ?? null,
     hasRefreshToken: Boolean(auth.tokens.refresh_token),
-    authFile: authFilePath(),
   };
 
   if (opts.json) {
@@ -166,6 +186,9 @@ async function cmdAuth(opts) {
     return;
   }
   console.log(`auth file:   ${info.authFile}`);
+  console.log(
+    `auth source: ${source === 'managed' ? 'managed by codex-img' : 'codex login (~/.codex)'}`,
+  );
   console.log(`auth mode:   ${info.authMode}`);
   console.log(`account id:  ${info.accountId ?? '(none)'}`);
   console.log(`plan:        ${info.plan ?? '(not in token claims)'}`);
@@ -176,6 +199,78 @@ async function cmdAuth(opts) {
   );
   console.log(`refresh tok: ${info.hasRefreshToken ? 'present' : 'MISSING'}`);
   console.log(`last refresh:${info.lastRefresh ?? '?'}`);
+}
+
+async function cmdLogin(opts) {
+  const { login } = await import('./login.mjs');
+  const device = opts.device === true;
+
+  const result = await login({
+    device,
+    browser: opts['no-browser'] !== true,
+    timeoutMs: num(opts.timeout, 300000),
+    onPrompt(prompt) {
+      if (prompt.type === 'device') {
+        console.log('Open this page and enter the code below:\n');
+        console.log(`  ${prompt.url}\n`);
+        console.log(`  code: ${prompt.userCode}\n`);
+        console.log('Waiting for authorization…');
+      } else {
+        console.log('Open this URL to sign in:\n');
+        console.log(`  ${prompt.url}\n`);
+        if (opts['no-browser'] === true) {
+          console.log('Waiting for the callback…');
+        } else {
+          console.log('A browser should open automatically. Waiting for the callback…');
+        }
+      }
+    },
+  });
+
+  const codexLoginExists = authSource() === 'codex';
+  const summary = {
+    signedIn: true,
+    flow: result.flow,
+    accountId: result.accountId,
+    plan: result.plan,
+    saved: result.file,
+    codexLoginPresent: codexLoginExists,
+  };
+
+  if (opts.json) {
+    console.log(JSON.stringify(summary, null, 2));
+    return;
+  }
+
+  console.log('');
+  console.log('signed in');
+  console.log(`  account:  ${result.accountId}`);
+  console.log(`  plan:     ${result.plan ?? '(not in token claims)'}`);
+  console.log(`  saved to: ${result.file}`);
+  if (codexLoginExists) {
+    console.log('');
+    console.log(
+      `note: a Codex login also exists at ${authFilePath()}. codex-img now uses the\n` +
+        '      credentials it manages; run `codex-img logout` to fall back to the Codex one.',
+    );
+  }
+}
+
+async function cmdLogout(opts) {
+  const { existed, file } = removeManagedAuth();
+  const summary = { removed: existed, file, managedHome: managedHome() };
+
+  if (opts.json) {
+    console.log(JSON.stringify(summary, null, 2));
+    return;
+  }
+
+  if (!existed) {
+    console.log(`not logged in — nothing at ${file}`);
+    return;
+  }
+  console.log(`removed ${file}`);
+  console.log(`the Codex login in ${authFilePath()} was left untouched`);
 }
 
 async function cmdGen(opts, client) {
@@ -262,6 +357,12 @@ export async function run(argv) {
   switch (resolved.name) {
     case 'auth':
       await cmdAuth(opts);
+      return 0;
+    case 'login':
+      await cmdLogin(opts);
+      return 0;
+    case 'logout':
+      await cmdLogout(opts);
       return 0;
     case 'mcp': {
       const { runMcpServer } = await import('./mcp.mjs');

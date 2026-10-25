@@ -56,6 +56,38 @@ the `refresh_token` from the same file is exchanged for a fresh one and written
 back atomically (temp file + rename), so Codex CLI and this tool can share one
 login.
 
+## Signing in
+
+Already have `codex login` on this machine? **Nothing to do** — the tool picks
+up `~/.codex/auth.json` and refreshes it for you.
+
+No Codex login? Sign in with this tool instead:
+
+```bash
+codex-img login            # browser flow
+codex-img login --device   # device code, for SSH / containers / headless boxes
+```
+
+The credentials are written to `<package>/.codex-img/auth.json` — inside the
+package's own install directory. Two consequences:
+
+- **Uninstalling the package removes the credentials with it.** No token is
+  left on the machine. npm 11 has no uninstall lifecycle hook at all (its
+  arborist does not implement `preuninstall`/`postuninstall`), so the layout
+  is what makes that guarantee real rather than a promise.
+- Reinstalling the package — or switching Node versions when it is installed
+  globally — means signing in again. Set `CODEX_IMG_HOME` to keep the
+  credentials somewhere else if you would rather.
+
+The Codex login in `~/.codex` is **never overwritten**. When both exist, the
+credentials managed here take precedence; `codex-img logout` removes them and
+falls back to the Codex login.
+
+```bash
+codex-img logout           # remove the credentials this tool manages
+codex-img auth             # show which store is in use
+```
+
 ## Install
 
 ```bash
@@ -108,6 +140,8 @@ codex-img edit --image cabin.png \
 | Command | What it does |
 |---|---|
 | `codex-img auth` | Show credential status — no network request |
+| `codex-img login` | Sign in with a ChatGPT subscription (no Codex login needed) |
+| `codex-img logout` | Remove the credentials this tool manages |
 | `codex-img gen` | Generate an image from a text prompt |
 | `codex-img edit` | Edit existing image(s) with a text instruction |
 | `codex-img models` | Probe which model ids the endpoint actually honours |
@@ -227,7 +261,8 @@ backend serves.
 
 ## Requirements and limits
 
-- Needs a ChatGPT subscription and `codex login` on the same machine.
+- Needs a ChatGPT subscription, and either `codex login` on this machine or a
+  `codex-img login` of your own.
 - This calls an **undocumented internal endpoint** that is not part of the
   OpenAI developer documentation. It can change or disappear at any time.
 - Using subscription credentials from a non-official client **violates the
@@ -255,8 +290,11 @@ src/cli.mjs         argument parsing and command dispatch
 src/help.mjs        the command registry and all help text
 src/client.mjs      endpoint calls, base64 payloads, file writing
 src/auth.mjs        credential file, token refresh, atomic write
+src/credentials.mjs the credential store this CLI manages
+src/login.mjs       OAuth sign-in (browser and device code flows)
 src/mcp.mjs         MCP stdio server and tool schemas
 src/version.mjs     version, read from package.json
+scripts/cleanup-credentials.mjs   removes the credentials on uninstall
 ```
 
 CI runs the suite on Linux, macOS and Windows against Node 20, 22 and 24.

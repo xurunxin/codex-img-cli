@@ -2,10 +2,19 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { hasManagedAuth, managedAuthPath } from './credentials.mjs';
+
 /** Codex CLI public OAuth client. Confirmed against openai/codex + several independent clients. */
 export const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 export const CODEX_TOKEN_URL = 'https://auth.openai.com/oauth/token';
 export const CODEX_SCOPES = 'openid profile email offline_access';
+
+/** The OAuth issuer Codex CLI talks to. */
+export const CODEX_ISSUER = 'https://auth.openai.com';
+
+/** Scopes requested by the interactive login. */
+export const CODEX_LOGIN_SCOPES =
+  'openid profile email offline_access api.connectors.read api.connectors.invoke';
 
 /** Base of the subscription-backed images API (not api.openai.com). */
 export const CODEX_API_BASE = 'https://chatgpt.com/backend-api/codex';
@@ -14,8 +23,27 @@ export function codexHome() {
   return process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
 }
 
+/** The credentials Codex CLI itself wrote (`codex login`). */
 export function authFilePath() {
   return path.join(codexHome(), 'auth.json');
+}
+
+/**
+ * Which credential store is in use.
+ *
+ * 'managed' — the credentials this CLI signed in with, in its own directory.
+ * 'codex'   — the Codex CLI login in ~/.codex, used as a fallback.
+ *
+ * The managed store wins when it exists: the user asked for it explicitly by
+ * running `codex-img login`. It is never written to, only read.
+ */
+export function authSource() {
+  return hasManagedAuth() ? 'managed' : 'codex';
+}
+
+/** The credential file that will actually be used. */
+export function effectiveAuthPath() {
+  return hasManagedAuth() ? managedAuthPath() : authFilePath();
 }
 
 /**
@@ -47,23 +75,22 @@ export function decodeJwtClaims(token) {
   }
 }
 
-export function readAuthFile() {
-  const file = authFilePath();
-  if (!fs.existsSync(file)) {
+export function readAuthFile(filePath = effectiveAuthPath()) {
+  if (!fs.existsSync(filePath)) {
     throw new Error(
-      `Codex auth file not found: ${file}\n` +
-        'Run `codex login` first (or set CODEX_HOME to a directory containing auth.json).',
+      `Codex auth file not found: ${filePath}\n` +
+        'Run `codex-img login` (or `codex login`) first.',
     );
   }
   let parsed;
   try {
-    parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
   } catch (err) {
-    throw new Error(`Failed to parse ${file}: ${err.message}`);
+    throw new Error(`Failed to parse ${filePath}: ${err.message}`);
   }
   if (!parsed?.tokens?.access_token) {
     throw new Error(
-      `${file} has no tokens.access_token. The CLI expects a ChatGPT-subscription login ` +
+      `${filePath} has no tokens.access_token. The CLI expects a ChatGPT-subscription login ` +
         '(codex login), not an OPENAI_API_KEY login.',
     );
   }
@@ -78,17 +105,19 @@ export function readAuthFile() {
  * non-atomically, a crash mid-write corrupts the file. So: temp file + rename,
  * in the same directory (rename is atomic only within one filesystem).
  */
-export function writeAuthFile(auth) {
-  const file = authFilePath();
-  const tmp = `${file}.${process.pid}.tmp`;
+export function writeAuthFile(auth, filePath = effectiveAuthPath()) {
+  const tmp = `${filePath}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(auth, null, 2), 'utf8');
-  fs.renameSync(tmp, file);
+  fs.renameSync(tmp, filePath);
 }
 
 /**
  * Exchange the refresh token for a new access token and persist the result.
+ *
+ * `filePath` is the file the credentials were read from, so a refresh never
+ * migrates credentials between the managed store and the Codex store.
  */
-export async function refreshAccessToken(auth = readAuthFile()) {
+export async function refreshAccessToken(auth = readAuthFile(), filePath = effectiveAuthPath()) {
   const refreshToken = auth?.tokens?.refresh_token;
   if (!refreshToken) {
     throw new Error('No refresh_token in auth.json. Run `codex login` to re-authenticate.');
@@ -132,7 +161,7 @@ export async function refreshAccessToken(auth = readAuthFile()) {
   if (data.id_token) auth.tokens.id_token = data.id_token;
   auth.last_refresh = new Date().toISOString();
 
-  writeAuthFile(auth);
+  writeAuthFile(auth, filePath);
   return auth;
 }
 
@@ -144,7 +173,10 @@ export async function refreshAccessToken(auth = readAuthFile()) {
  * @param {number}  opts.skewSec Treat the token as expired this many seconds early.
  */
 export async function resolveCredentials({ refresh = true, skewSec = 90 } = {}) {
-  let auth = readAuthFile();
+  // Pin the file for this call: a refresh must write back to the same store
+  // the credentials came from.
+  const filePath = effectiveAuthPath();
+  let auth = readAuthFile(filePath);
   const exp = decodeJwtExp(auth.tokens.access_token);
   const nowSec = Math.floor(Date.now() / 1000);
   const needsRefresh = exp !== null && exp - nowSec <= skewSec;
@@ -156,7 +188,7 @@ export async function resolveCredentials({ refresh = true, skewSec = 90 } = {}) 
           'and auto-refresh is disabled (--no-refresh).',
       );
     }
-    auth = await refreshAccessToken(auth);
+    auth = await refreshAccessToken(auth, filePath);
   }
 
   return {

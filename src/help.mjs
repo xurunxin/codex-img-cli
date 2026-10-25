@@ -19,6 +19,8 @@ Usage:
 
 Commands:
   auth      Show credential status (no network)
+  login     Sign in with a ChatGPT subscription (no Codex login needed)
+  logout    Remove the credentials this CLI manages
   gen       Generate an image from a text prompt
   edit      Edit existing image(s) with a text instruction
   models    Probe which model ids the endpoint actually honours
@@ -27,16 +29,18 @@ Commands:
 Global options:
   -h, --help      Show this help, or per-command help when a command is given
   -v, --version   Print the version
-  --json          Machine-readable JSON output (auth, gen, edit)
+  --json          Machine-readable JSON output (auth, login, logout, gen, edit)
 
 Getting started:
   codex-img auth                     # check the subscription login (offline)
+  codex-img login                    # sign in, if there is no Codex login yet
   codex-img gen --prompt "..." --out a.png
   codex-img help gen                 # every option, with examples
 
 Notes:
-  * Credentials come from ~/.codex/auth.json (run \`codex login\` first).
-    OPENAI_API_KEY is never read.
+  * Credentials come from the store codex-img manages (inside its own install
+    directory) when you ran \`codex-img login\`, otherwise from the Codex login
+    in ~/.codex/auth.json. OPENAI_API_KEY is never read.
   * The endpoint ignores the \`model\` field and usually ignores \`size\`; the
     size reported in the output is the real one.
   * Exit codes: 0 success, 1 request/auth failure, 2 bad usage.
@@ -63,6 +67,70 @@ Example:
 Reported fields:
   auth file, auth mode, account id, plan, audience,
   access tok (valid / EXPIRED + minutes left), refresh tok, last refresh
+`.trim();
+
+const LOGIN_HELP = `
+codex-img login — sign in with a ChatGPT subscription
+
+Usage:
+  codex-img login [--device] [--no-browser] [--timeout <ms>]
+
+Signs in with your ChatGPT account and stores the credentials in the directory
+this CLI manages: <package>/.codex-img/auth.json, inside its own install
+directory. The Codex login in ~/.codex is left untouched — signing in here
+never overwrites it.
+
+Use this when there is no \`codex login\` on this machine. When both exist, the
+credentials managed here take precedence; \`codex-img logout\` falls back to the
+Codex login.
+
+Because the credentials live inside the package directory, uninstalling the
+package removes them as well. Reinstalling — or switching Node versions when
+the package is installed globally — means signing in again. Set CODEX_IMG_HOME
+to keep them somewhere else.
+
+Options:
+  --device          Use the device code flow instead of a local browser
+                    callback. Best over SSH, in containers, or on a headless box.
+  --no-browser      Print the authorization URL but do not open a browser
+  --timeout <ms>    How long to wait for the sign-in (default: 300000)
+  --json            Print the result as JSON
+  -h, --help        This help
+
+Browser flow:
+  1. A local server listens on 127.0.0.1:1455 (fallback 1457).
+  2. The browser is sent to auth.openai.com with a PKCE challenge.
+  3. The callback returns an authorization code, exchanged for tokens.
+  4. The tokens are written to <package>/.codex-img/auth.json.
+
+Device flow (--device):
+  1. A one-time code is requested.
+  2. Open https://auth.openai.com/codex/device and enter that code.
+  3. The CLI polls until the sign-in is approved.
+
+Example:
+  codex-img login
+  codex-img login --device
+`.trim();
+
+const LOGOUT_HELP = `
+codex-img logout — remove the credentials this CLI manages
+
+Usage:
+  codex-img logout [--json]
+
+Deletes <package>/.codex-img/auth.json and, once it is empty, the directory
+itself. The Codex login in ~/.codex is never touched.
+
+Uninstalling the package removes the same file, so no credentials are left
+behind on disk either way.
+
+Options:
+  --json      Print the result as JSON
+  -h, --help  This help
+
+Example:
+  codex-img logout
 `.trim();
 
 const GEN_HELP = `
@@ -212,6 +280,8 @@ Notes:
  */
 export const COMMANDS = [
   { name: 'auth', aliases: [], summary: 'Show credential status (no network)', help: AUTH_HELP },
+  { name: 'login', aliases: [], summary: 'Sign in with a ChatGPT subscription (no Codex login needed)', help: LOGIN_HELP },
+  { name: 'logout', aliases: [], summary: 'Remove the credentials this CLI manages', help: LOGOUT_HELP },
   { name: 'gen', aliases: ['generate'], summary: 'Generate an image from a text prompt', help: GEN_HELP },
   { name: 'edit', aliases: [], summary: 'Edit existing image(s) with a text instruction', help: EDIT_HELP },
   { name: 'models', aliases: [], summary: 'Probe which model ids the endpoint actually honours', help: MODELS_HELP },

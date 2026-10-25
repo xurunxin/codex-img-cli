@@ -17,3 +17,4 @@ Thumbs.db
 # never commit local credentials if anyone copies one in by accident
 auth.json
 .codex/
+.codex-img/
