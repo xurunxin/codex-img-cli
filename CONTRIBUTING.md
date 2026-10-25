@@ -47,6 +47,16 @@ dependency:
 python scripts/optimize-docs-images.py
 ```
 
+## Checking the OAuth constants
+
+The login flow mirrors `openai/codex`. When the upstream implementation
+changes, `scripts/extract-bin-strings.mjs` helps you read the constants out of
+a local Codex binary instead of guessing:
+
+```bash
+node scripts/extract-bin-strings.mjs <path-to>/codex.exe "oauth/authorize" "auth/callback"
+```
+
 ## Reporting bugs
 
 Open an issue with the output of `codex-img auth --json` (redact the account
