@@ -2,36 +2,17 @@ import path from 'node:path';
 
 import { DEFAULT_MODEL, writeBase64ToFile } from './client.mjs';
 import { authFilePath, decodeJwtClaims, decodeJwtExp, readAuthFile } from './auth.mjs';
+import { COMMANDS, USAGE, findCommand, helpFor } from './help.mjs';
+import { version } from './version.mjs';
 
-const USAGE = `
-codex-img — image generation/editing on the local ChatGPT (Codex) subscription
-
-Usage:
-  codex-img auth                                  Show credential status (no network)
-  codex-img gen    --prompt <text> [options]       Generate an image
-  codex-img edit   --image <file>... --prompt <t>  Edit existing image(s)
-  codex-img models [--prompt <text>]              Probe which model ids are honoured
-  codex-img mcp                                   Run as an MCP stdio server
-
-Common options:
-  --prompt <text>       Prompt (required for gen/edit)
-  --out <file>          Output path (default: ./codex-img-<timestamp>.png)
-  --model <id>          Model id sent in the body (default: ${DEFAULT_MODEL})
-  --background <mode>   transparent | opaque | auto   (default: opaque)
-  --quality <q>         low | medium | high | xhigh | max | auto  (default: auto)
-  --size <WxH|auto>     e.g. 1024x1024, 2048x1152, auto (default: auto)
-  --timeout <ms>        Per-request timeout (default: 300000)
-  --base-url <url>      Override the API base (default: the subscription endpoint)
-  --no-refresh          Fail instead of refreshing an expired access token
-  --json                Print machine-readable JSON to stdout
-  -h, --help            This help
-
-gen options:
-  --n <count>           Number of images (only the first is written to --out)
-
-edit options:
-  --image <file>        Input image; repeat for multiple (max 5)
-`.trim();
+/**
+ * Flags that never take a value.
+ *
+ * Without this list a boolean flag would swallow the next argument whenever
+ * that argument did not start with `--` — `--transparent out.png` would set
+ * the background to "out.png" instead of writing the file.
+ */
+const BOOLEAN_FLAGS = new Set(['help', 'version', 'json', 'no-refresh', 'transparent']);
 
 function parseArgs(argv) {
   const opts = { _: [] };
@@ -43,6 +24,10 @@ function parseArgs(argv) {
       opts.help = true;
       continue;
     }
+    if (arg === '-v' || arg === '--version') {
+      opts.version = true;
+      continue;
+    }
     if (!arg.startsWith('--')) {
       opts._.push(arg);
       continue;
@@ -52,6 +37,9 @@ function parseArgs(argv) {
     let value;
     if (eq !== -1) {
       value = arg.slice(eq + 1);
+    } else if (BOOLEAN_FLAGS.has(key)) {
+      opts[key] = true;
+      continue;
     } else {
       value = argv[i + 1];
       if (value === undefined || value.startsWith('--')) {
@@ -76,10 +64,12 @@ function num(value, fallback) {
 }
 
 function commonRequestArgs(opts) {
+  const explicitBackground = typeof opts.background === 'string' ? opts.background : undefined;
   return {
     prompt: typeof opts.prompt === 'string' ? opts.prompt : undefined,
     model: typeof opts.model === 'string' ? opts.model : DEFAULT_MODEL,
-    background: typeof opts.background === 'string' ? opts.background : 'opaque',
+    // --transparent is a shorthand; an explicit --background still wins.
+    background: explicitBackground ?? (opts.transparent === true ? 'transparent' : 'opaque'),
     quality: typeof opts.quality === 'string' ? opts.quality : 'auto',
     size: typeof opts.size === 'string' ? opts.size : 'auto',
     baseUrl: typeof opts['base-url'] === 'string' ? opts['base-url'] : undefined,
@@ -93,15 +83,35 @@ function defaultOut(prefix) {
   return path.resolve(process.cwd(), `codex-img-${prefix}-${stamp}.png`);
 }
 
+/** `cabin.png` -> `cabin-2.png`; a path without extension just gets a suffix. */
+function withIndexSuffix(outPath, index) {
+  const ext = path.extname(outPath);
+  const base = ext ? outPath.slice(0, -ext.length) : outPath;
+  return `${base}-${index}${ext}`;
+}
+
 function reportResult(result, outPath, opts, { write = true } = {}) {
-  let saved = null;
-  if (write && result.b64 && outPath) {
-    saved = writeBase64ToFile(result.b64, outPath);
+  const savedFiles = [];
+  if (write && outPath) {
+    const images = Array.isArray(result.images) && result.images.length > 0 ? result.images : null;
+    if (images) {
+      // n > 1 returns several images: the first takes --out, the rest are
+      // numbered next to it. Dropping them would silently lose paid-for work.
+      images.forEach((image, index) => {
+        const target = index === 0 ? outPath : withIndexSuffix(outPath, index + 1);
+        savedFiles.push(writeBase64ToFile(image.b64, target));
+      });
+    } else if (result.b64) {
+      savedFiles.push(writeBase64ToFile(result.b64, outPath));
+    }
   }
 
+  const saved = savedFiles[0] ?? null;
   const summary = {
     endpoint: result.endpoint,
     saved,
+    savedFiles,
+    count: savedFiles.length,
     background: result.background,
     size: result.size,
     quality: result.quality,
@@ -115,6 +125,9 @@ function reportResult(result, outPath, opts, { write = true } = {}) {
     console.log(JSON.stringify(summary, null, 2));
   } else {
     console.log(`saved:   ${saved ?? '(not written)'}`);
+    for (const extra of savedFiles.slice(1)) {
+      console.log(`         ${extra}`);
+    }
     console.log(`endpoint:${result.endpoint}`);
     console.log(`size:    ${result.size ?? '?'}   quality: ${result.quality ?? '?'}`);
     console.log(`bg:      ${result.background ?? '?'}   format: ${result.outputFormat ?? '?'}`);
@@ -187,52 +200,88 @@ async function cmdModels(opts, client) {
       : ['gpt-image-2.5-flare', 'gpt-image-2.5-sunburst', 'gpt-image-2', 'gpt-image-2-nonexistent-probe'];
   const prompt =
     typeof opts.prompt === 'string' ? opts.prompt : 'a small red circle on white background';
-  const results = await client.probeModels({ prompt, models, allowRefresh: args0(opts) });
+  const results = await client.probeModels({
+    prompt,
+    models,
+    baseUrl: typeof opts['base-url'] === 'string' ? opts['base-url'] : undefined,
+    allowRefresh: opts['no-refresh'] !== true,
+  });
   console.log(JSON.stringify(results, null, 2));
 }
 
-function args0(opts) {
-  return opts['no-refresh'] !== true;
+function commandList() {
+  const width = Math.max(...COMMANDS.map((c) => c.name.length));
+  const lines = COMMANDS.map((c) => `  ${c.name.padEnd(width)}  ${c.summary}`);
+  return `Available commands:\n${lines.join('\n')}\n\nRun \`codex-img help <command>\` for details.`;
 }
 
 export async function run(argv) {
   const opts = parseArgs(argv);
   const command = opts._[0];
 
-  if (!command || opts.help || command === 'help') {
+  if (opts.version) {
+    console.log(version());
+    return 0;
+  }
+
+  // `codex-img help [command]` — the explicit form, which also works when a
+  // command name happens to collide with an option.
+  if (command === 'help') {
+    const target = opts._[1];
+    if (!target) {
+      console.log(USAGE);
+      return 0;
+    }
+    const help = helpFor(target);
+    if (!help) {
+      console.error(`Unknown command: ${target}\n`);
+      console.error(commandList());
+      return 2;
+    }
+    console.log(help);
+    return 0;
+  }
+
+  if (!command) {
     console.log(USAGE);
     return 0;
   }
 
-  if (command === 'auth') {
-    await cmdAuth(opts);
+  const resolved = findCommand(command);
+  if (!resolved) {
+    console.error(`Unknown command: ${command}\n`);
+    console.error(commandList());
+    return 2;
+  }
+
+  if (opts.help) {
+    console.log(resolved.help);
     return 0;
   }
 
-  if (command === 'mcp') {
-    const { runMcpServer } = await import('./mcp.mjs');
-    await runMcpServer();
-    return 0;
-  }
-
-  const client = await import('./client.mjs');
-
-  switch (command) {
-    case 'gen':
-    case 'generate':
-      await cmdGen(opts, client);
+  switch (resolved.name) {
+    case 'auth':
+      await cmdAuth(opts);
       return 0;
-    case 'edit':
-      await cmdEdit(opts, client);
+    case 'mcp': {
+      const { runMcpServer } = await import('./mcp.mjs');
+      await runMcpServer();
       return 0;
-    case 'models':
+    }
+    default: {
+      const client = await import('./client.mjs');
+      if (resolved.name === 'gen') {
+        await cmdGen(opts, client);
+        return 0;
+      }
+      if (resolved.name === 'edit') {
+        await cmdEdit(opts, client);
+        return 0;
+      }
       await cmdModels(opts, client);
       return 0;
-    default:
-      console.error(`Unknown command: ${command}\n`);
-      console.error(USAGE);
-      return 2;
+    }
   }
 }
 
-export { parseArgs, USAGE };
+export { parseArgs, USAGE, commonRequestArgs };

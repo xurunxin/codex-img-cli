@@ -3,6 +3,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 
 import { MAX_EDIT_IMAGES, editImage, generateImage } from './client.mjs';
+import { version } from './version.mjs';
 
 /**
  * Minimal MCP stdio server.
@@ -17,23 +18,46 @@ const TOOLS = [
   {
     name: 'generate_image',
     description:
-      'Generate an image from a text prompt using the local ChatGPT/Codex subscription. ' +
-      'Returns the saved file path plus the size/quality/usage reported by the API.',
+      'Generate an image from a text prompt using the local ChatGPT/Codex subscription ' +
+      '(credentials from ~/.codex/auth.json; no API key involved). Writes one PNG to ' +
+      '`out_path` and returns the saved path together with the size, quality and token ' +
+      'usage the API reported. Write a specific prompt — subject, style, composition, ' +
+      'lighting — and always pass an explicit `out_path` so the file lands where the ' +
+      'caller expects it. Note that this endpoint ignores the `model` id and usually ' +
+      'ignores `size` as well, so trust the returned size rather than the requested one.',
     inputSchema: {
       type: 'object',
       properties: {
-        prompt: { type: 'string', description: 'What to draw.' },
-        out_path: { type: 'string', description: 'Where to write the image file.' },
+        prompt: {
+          type: 'string',
+          description:
+            'What to draw. Be specific: subject, style, composition, lighting. English works best.',
+        },
+        out_path: {
+          type: 'string',
+          description:
+            'Absolute path of the PNG to write. Defaults to ./codex-img-generations-<timestamp>.png.',
+        },
         transparent: {
           type: 'boolean',
-          description: 'Request a transparent background (sent as background=transparent).',
+          description:
+            'Request a transparent background (sent as background=transparent). Omit for an opaque one.',
         },
-        size: { type: 'string', description: 'e.g. 1024x1024, 2048x1152, auto.' },
+        size: {
+          type: 'string',
+          description:
+            'Requested size, e.g. 1024x1024 or 2048x1152, or auto. Usually ignored by the endpoint.',
+        },
         quality: {
           type: 'string',
           enum: ['low', 'medium', 'high', 'xhigh', 'max', 'auto'],
+          description: 'Requested quality. Defaults to auto.',
         },
-        model: { type: 'string', description: 'Model id to place in the request body.' },
+        model: {
+          type: 'string',
+          description:
+            'Model id to place in the request body. Ignored by this endpoint — sent for parity only.',
+        },
       },
       required: ['prompt'],
       additionalProperties: false,
@@ -42,24 +66,52 @@ const TOOLS = [
   {
     name: 'edit_image',
     description:
-      'Edit one or more existing images using a text instruction. ' +
-      `Pass 1-${MAX_EDIT_IMAGES} local file paths.`,
+      'Edit one or more existing images using a text instruction (background swap, object ' +
+      'removal, restyling). Pass 1-' +
+      `${MAX_EDIT_IMAGES} local file paths in \`image_paths\`; the result is written to ` +
+      '`out_path` and the saved path is returned. Keep the instruction focused on what ' +
+      'to change and state explicitly what must stay unchanged — otherwise the model may ' +
+      'alter the rest of the frame.',
     inputSchema: {
       type: 'object',
       properties: {
-        prompt: { type: 'string', description: 'What to change.' },
+        prompt: {
+          type: 'string',
+          description:
+            'What to change. Say explicitly what must remain unchanged.',
+        },
         image_paths: {
           type: 'array',
           items: { type: 'string' },
           minItems: 1,
           maxItems: MAX_EDIT_IMAGES,
-          description: 'Local image file paths to edit.',
+          description:
+            'Local image file paths to edit (png, jpg, jpeg, webp, gif). Pass several to compose them.',
         },
-        out_path: { type: 'string', description: 'Where to write the result.' },
-        transparent: { type: 'boolean' },
-        size: { type: 'string' },
-        quality: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max', 'auto'] },
-        model: { type: 'string' },
+        out_path: {
+          type: 'string',
+          description:
+            'Absolute path of the result PNG. Defaults to ./codex-img-edits-<timestamp>.png.',
+        },
+        transparent: {
+          type: 'boolean',
+          description: 'Request a transparent background (sent as background=transparent).',
+        },
+        size: {
+          type: 'string',
+          description:
+            'Requested size, e.g. 1024x1024, or auto. Usually ignored by the endpoint.',
+        },
+        quality: {
+          type: 'string',
+          enum: ['low', 'medium', 'high', 'xhigh', 'max', 'auto'],
+          description: 'Requested quality. Defaults to auto.',
+        },
+        model: {
+          type: 'string',
+          description:
+            'Model id to place in the request body. Ignored by this endpoint — sent for parity only.',
+        },
       },
       required: ['prompt', 'image_paths'],
       additionalProperties: false,
@@ -167,7 +219,7 @@ export async function runMcpServer() {
           ok(id, {
             protocolVersion: PROTOCOL_VERSION,
             capabilities: { tools: { listChanged: false } },
-            serverInfo: { name: 'codex-img-cli', version: '0.1.0' },
+            serverInfo: { name: 'codex-img-cli', version: version() },
           });
           break;
 

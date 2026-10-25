@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { parseArgs, USAGE } from '../src/cli.mjs';
+import { parseArgs, USAGE, commonRequestArgs, run } from '../src/cli.mjs';
 import { decodeJwtExp, decodeJwtClaims } from '../src/auth.mjs';
 import { fileToDataUrl, generateImage } from '../src/client.mjs';
 import http from 'node:http';
@@ -67,6 +67,95 @@ test('USAGE documents every subcommand', () => {
   for (const cmd of ['auth', 'gen', 'edit', 'models', 'mcp']) {
     assert.ok(USAGE.includes(cmd), `USAGE should mention ${cmd}`);
   }
+});
+
+/** Capture what the CLI writes to stdout/stderr while a command runs. */
+async function capture(fn) {
+  const out = [];
+  const err = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (...args) => out.push(args.join(' '));
+  console.error = (...args) => err.push(args.join(' '));
+  try {
+    const code = await fn();
+    return { code, stdout: out.join('\n'), stderr: err.join('\n') };
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
+}
+
+test('every command has its own help text', async () => {
+  for (const cmd of ['auth', 'gen', 'edit', 'models', 'mcp']) {
+    const { code, stdout } = await capture(() => run(['help', cmd]));
+    assert.equal(code, 0, `help ${cmd} should succeed`);
+    assert.ok(stdout.includes(`codex-img ${cmd}`), `${cmd} help should name the command`);
+    assert.ok(stdout.includes('Usage:'), `${cmd} help should show a synopsis`);
+    assert.ok(stdout.includes('Options:'), `${cmd} help should list options`);
+  }
+});
+
+test('a command with --help prints its own help, not the global usage', async () => {
+  const { code, stdout } = await capture(() => run(['gen', '--help']));
+  assert.equal(code, 0);
+  assert.ok(stdout.includes('--prompt'), 'gen help should document --prompt');
+  assert.ok(stdout.includes('codex-img gen —'), 'gen help should have its own title');
+  assert.ok(!stdout.includes('Run `codex-img help <command>`'), 'should not be the global usage');
+});
+
+test('the gen help spells out the caveats an agent would otherwise guess wrong', async () => {
+  const { stdout } = await capture(() => run(['help', 'gen']));
+  assert.ok(stdout.includes('--transparent'), 'gen help should document --transparent');
+  assert.ok(stdout.includes('ignores the `model` field'), 'gen help should warn that model is ignored');
+  assert.ok(stdout.includes('--out'), 'gen help should document --out');
+});
+
+test('the edit help states the image limit', async () => {
+  const { stdout } = await capture(() => run(['help', 'edit']));
+  assert.ok(/at most 5/i.test(stdout), 'edit help should state the 5 image limit');
+});
+
+test('help for an unknown command is a usage error', async () => {
+  const { code, stderr } = await capture(() => run(['help', 'nope']));
+  assert.equal(code, 2);
+  assert.ok(stderr.includes('Unknown command: nope'));
+  assert.ok(stderr.includes('Available commands:'), 'the error should list the valid commands');
+});
+
+test('an unknown command is a usage error', async () => {
+  const { code, stderr } = await capture(() => run(['nope']));
+  assert.equal(code, 2);
+  assert.ok(stderr.includes('Unknown command: nope'));
+});
+
+test('--version prints the package version', async () => {
+  const { code, stdout } = await capture(() => run(['--version']));
+  assert.equal(code, 0);
+  assert.match(stdout.trim(), /^\d+\.\d+\.\d+/);
+});
+
+test('boolean flags never swallow the next argument', () => {
+  const o = parseArgs(['gen', '--transparent', '--out', 'x.png']);
+  assert.equal(o.transparent, true);
+  assert.equal(o.out, 'x.png');
+
+  const j = parseArgs(['gen', '--json', '--out', 'x.png']);
+  assert.equal(j.json, true);
+  assert.equal(j.out, 'x.png');
+});
+
+test('--transparent maps to a transparent background, an explicit --background wins', () => {
+  assert.equal(commonRequestArgs(parseArgs(['gen', '--prompt', 'x'])).background, 'opaque');
+  assert.equal(
+    commonRequestArgs(parseArgs(['gen', '--prompt', 'x', '--transparent'])).background,
+    'transparent',
+  );
+  assert.equal(
+    commonRequestArgs(parseArgs(['gen', '--prompt', 'x', '--transparent', '--background', 'opaque']))
+      .background,
+    'opaque',
+  );
 });
 
 /**
