@@ -23,13 +23,18 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         node: [20, 22, 24]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
 
       # Zero runtime dependencies: there is nothing to install, and the test
       # suite deliberately needs no network access.
+      #
+      # `node --test` with no path argument: the runner discovers test files
+      # itself. A glob such as `test/*.test.mjs` would only work where the
+      # shell expands it — PowerShell does not, and Node 20 does not accept a
+      # glob as a path argument either.
       - name: Run tests
         run: npm test
