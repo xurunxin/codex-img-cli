@@ -1,16 +1,42 @@
 # codex-img-cli
 
-复用本机 **Codex / ChatGPT 订阅登录态**做图像生成与编辑的本地 CLI，并附带一个 MCP stdio 服务端，让其他 agent 直接调用。
+**Give any agent GPT-Image generation, by reusing the Codex / ChatGPT subscription you already pay for.**
 
-零依赖，只需 Node.js ≥ 20。
+Codex CLI ships an `imagegen` skill — but it lives *inside* the agent, so nothing
+else can reach it. Claude Code, MiniMax Code, OpenCode, Cursor, your own
+scripts… none of them can turn your ChatGPT plan into an image.
+
+`codex-img-cli` extracts the exact same endpoint into a standalone **CLI** and an
+**MCP stdio server**. Point any MCP client at it and "draw me a picture" becomes
+a tool call.
+
+![codex-img-cli hero](docs/hero.png)
+
+> Zero runtime dependencies · Node.js ≥ 20 · credentials never leave your machine
+
+[![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](https://nodejs.org)
+[![mcp](https://img.shields.io/badge/protocol-MCP-8A2BE2.svg)](#mcp)
+[![stars](https://img.shields.io/github/stars/xurunxin/codex-img-cli?style=social)](https://github.com/xurunxin/codex-img-cli/stargazers)
+
+English | [简体中文](README.zh-CN.md)
 
 ---
 
-## 它是怎么工作的
+## Why
 
-Codex CLI 自带的 `imagegen` 技能把生图能力藏在 agent 里面，外部拿不到。这个工具把同一条链路抽出来，直接从命令行调用。
+| | Codex `imagegen` skill | codex-img-cli |
+|---|---|---|
+| Who can call it | Codex only | any agent, any script |
+| Interface | sealed inside the agent | CLI + MCP stdio server |
+| Extra setup | — | `codex login`, once |
+| Credentials | managed by Codex | read from `~/.codex/auth.json` |
+| Dependencies | — | none |
 
-调用方式来自 `openai/codex` 的源码（`codex-rs/ext/image-generation/src/`）：
+## How it works
+
+The request shape is taken from the `openai/codex` source
+(`codex-rs/ext/image-generation/src/`):
 
 ```
 POST https://chatgpt.com/backend-api/codex/images/generations
@@ -24,142 +50,231 @@ Content-Type: application/json
   "quality": "auto", "size": "auto" }
 ```
 
-认证直接读 `~/.codex/auth.json`（即 `codex login` 写下的凭据），**不碰你的 `OPENAI_API_KEY`**。当 access token 临近过期时，用同一份文件里的 `refresh_token` 自动续期并原子写回。
+Authentication reads `~/.codex/auth.json` — the file `codex login` writes. Your
+`OPENAI_API_KEY` is never touched. When the access token is about to expire,
+the `refresh_token` from the same file is exchanged for a fresh one and written
+back atomically (temp file + rename), so Codex CLI and this tool can share one
+login.
 
----
-
-## 安装
+## Install
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/xurunxin/codex-img-cli.git
 cd codex-img-cli
-npm link          # 让 codex-img 进入 PATH
-npm test          # 8 个单元测试，不需要网络
+npm link          # puts `codex-img` on your PATH
+npm test          # 20 unit tests, no network access required
 ```
 
-不想全局安装就直接 `node bin/codex-img.mjs ...`。
+Prerequisite: run `codex login` on this machine, with an account that has a
+ChatGPT subscription.
 
-前置条件：本机跑过 `codex login`，且账号有 ChatGPT 订阅。
+Prefer not to install it? `node bin/codex-img.mjs ...` works exactly the same.
 
----
+<details>
+<summary><b>Windows + nvm: getting <code>codex-img</code> onto PATH</b></summary>
 
-## 用法
+`npm link` writes the shim into the npm global directory. Under nvm-windows that
+is the **version** directory (`…\nvm\installs\<version>\`), which is not on PATH
+and disappears when you switch Node versions. Drop a small wrapper into a
+directory that *is* on PATH:
 
-### 看认证状态（不联网）
+```bat
+@echo off
+setlocal
+set "CODEX_IMG_ENTRY=<repo>\bin\codex-img.mjs"
+set "CODEX_IMG_NODE=%LOCALAPPDATA%\Author Software\nvm\.nodejs\node.exe"
+if not exist "%CODEX_IMG_NODE%" set "CODEX_IMG_NODE=node"
+"%CODEX_IMG_NODE%" "%CODEX_IMG_ENTRY%" %*
+exit /b %errorlevel%
+```
+
+Save it as `%USERPROFILE%\.local\bin\codex-img.cmd`, then check with
+`where codex-img`.
+
+</details>
+
+## Quick start
 
 ```bash
-codex-img auth
-```
-
-```
-auth file:   C:\Users\you\.codex\auth.json
-auth mode:   chatgpt
-account id:  c47df3ea-...
-plan:        pro
-audience:    https://api.openai.com/v1
-access tok:  valid (6152 min left)
-refresh tok: present
-```
-
-### 生成
-
-```bash
+codex-img auth                        # check the login — offline, no quota
 codex-img gen --prompt "a cozy alpine cabin at dawn" --out cabin.png
-codex-img gen --prompt "product icon" --transparent --size 1024x1024 --quality high --out icon.png
-```
-
-### 编辑（最多 5 张参考图）
-
-```bash
-codex-img edit --image a.png --image b.png \
-  --prompt "把背景换成暖色夕阳，其余保持不变" \
+codex-img edit --image cabin.png \
+  --prompt "replace the background with a warm sunset, keep the cabin unchanged" \
   --out sunset.png
 ```
 
-### 探针：端点到底认不认 model 字段
+## CLI reference
+
+| Command | What it does |
+|---|---|
+| `codex-img auth` | Show credential status — no network request |
+| `codex-img gen` | Generate an image from a text prompt |
+| `codex-img edit` | Edit existing image(s) with a text instruction |
+| `codex-img models` | Probe which model ids the endpoint actually honours |
+| `codex-img mcp` | Run as an MCP stdio server |
+
+Common options:
+
+| Option | Description |
+|---|---|
+| `--out <file>` | Output path (default `./codex-img-<timestamp>.png`) |
+| `--transparent` | Shorthand for `--background transparent` |
+| `--background <mode>` | `transparent` / `opaque` / `auto` (default `opaque`) |
+| `--quality <q>` | `low` / `medium` / `high` / `xhigh` / `max` / `auto` |
+| `--size <WxH>` | e.g. `1024x1024`, `2048x1152`, `auto` |
+| `--model <id>` | Model id placed in the request body (see [below](#what-the-endpoint-really-honours)) |
+| `--timeout <ms>` | Per-request timeout (default `300000`) |
+| `--base-url <url>` | Override the API base URL |
+| `--no-refresh` | Fail instead of auto-refreshing an expired access token |
+| `--json` | Machine-readable output |
+
+Command-specific: `gen --n <count>`, `edit --image <file>` (repeatable, max 5),
+`models --models <a,b,c>`.
+
+### Help
+
+Every command carries its own help text, so an agent can learn the tool from the
+tool itself:
 
 ```bash
-codex-img models --prompt "a tiny grey dot on white"
+codex-img                    # overview: command table + notes
+codex-img help gen           # full reference for one command
+codex-img gen --help         # same thing
+codex-img --version
 ```
 
-### 通用选项
+Each command's help lists its required arguments, every option, runnable
+examples, and the behaviour that is easy to get wrong — for example that the
+endpoint ignores `model`, or that `edit` takes at most five reference images.
+An unknown command exits with code 2 and lists the valid commands.
 
-| 选项 | 说明 |
-|---|---|
-| `--out <file>` | 输出路径，默认 `codex-img-<时间戳>.png` |
-| `--background <mode>` | `transparent` / `opaque` / `auto`（默认 `opaque`） |
-| `--quality <q>` | `low` / `medium` / `high` / `xhigh` / `max` / `auto` |
-| `--size <WxH>` | 例如 `1024x1024`、`2048x1152`、`auto` |
-| `--model <id>` | 放进请求体的 model id（见下方「重要发现」） |
-| `--timeout <ms>` | 单次请求超时，默认 300000 |
-| `--no-refresh` | token 过期时直接报错，不自动续期 |
-| `--json` | 机器可读输出 |
+### Multiple images
 
----
+`--n` requests more than one image: the first is written to `--out`, the rest
+to `<out>-2.png`, `<out>-3.png`, …
 
-## 作为 MCP 服务端
+```bash
+codex-img gen --prompt "four variations of a brass compass" --n 4 --out compass.png
+```
 
-让 Claude Code、MiniMax Code、Codex 等任意 MCP 客户端直接生图。
+## MCP
+
+The `mcp` command speaks JSON-RPC 2.0 over stdin/stdout. Any MCP client that
+speaks stdio can use it.
 
 ```jsonc
 {
   "mcpServers": {
     "codex-img": {
       "command": "node",
-      "args": ["C:/path/to/codex-img-cli/bin/codex-img.mjs", "mcp"]
+      "args": ["/absolute/path/to/codex-img-cli/bin/codex-img.mjs", "mcp"]
     }
   }
 }
 ```
 
-暴露两个工具：
+With Claude Code:
 
-- `generate_image` — `prompt`, `out_path`, `transparent`, `size`, `quality`, `model`
-- `edit_image` — `prompt`, `image_paths[]`（1–5 张）, `out_path`, `transparent`, `size`, `quality`
+```bash
+claude mcp add codex-img -- node /absolute/path/to/codex-img-cli/bin/codex-img.mjs mcp
+```
 
----
+Two tools are exposed:
 
-## 重要发现：model 字段其实不起作用
+| Tool | Parameters |
+|---|---|
+| `generate_image` | `prompt`, `out_path`, `transparent`, `size`, `quality`, `model` |
+| `edit_image` | `prompt`, `image_paths[]` (1–5), `out_path`, `transparent`, `size`, `quality`, `model` |
 
-OpenAI 在 2026-09-08 发布了 **GPT-Image-2.5**，API 侧拆成 `gpt-image-2.5-flare`（快）和 `gpt-image-2.5-sunburst`（精）两个模型。但在这个订阅通道上，**你无法选择它们**。
+The tool descriptions spell out how to write the prompt, why `out_path` should
+always be explicit, and that `model` and `size` are ignored by this endpoint —
+so an agent calls it correctly without any extra documentation.
 
-`codex-img models` 的实测输出（本仓库作者在 Pro 订阅上跑出来的）：
+The same request, both ways:
 
-| 请求的 model | 结果 | 返回 size | 返回 quality |
+| | |
+|---|---|
+| ![generated](docs/hero.png) | ![edited](docs/hero-sunset.png) |
+| `codex-img gen --prompt "…robot handing a picture card…" --out hero.png` | `codex-img edit --image hero.png --prompt "…warm sunset background…" --out hero-sunset.png` |
+
+## What the endpoint really honours
+
+OpenAI shipped **GPT-Image-2.5** on 2026-09-08, split on the API side into
+`gpt-image-2.5-flare` (fast) and `gpt-image-2.5-sunburst` (precise). On this
+subscription channel you cannot pick between them.
+
+`codex-img models` probes it first-hand — measured on a Pro subscription:
+
+| Requested model | Result | Returned size | Returned quality |
 |---|---|---|---|
 | `gpt-image-2.5-flare` | HTTP 200 | 1448x1086 | low |
 | `gpt-image-2.5-sunburst` | HTTP 200 | 1448x1086 | low |
 | `gpt-image-2` | HTTP 200 | 1448x1086 | low |
-| `gpt-image-2-nonexistent-probe`（编的） | **HTTP 200** | 1448x1086 | low |
+| `gpt-image-2-nonexistent-probe` (made up) | **HTTP 200** | 1448x1086 | low |
 
-**连一个根本不存在的模型 id 都返回 200**，说明端点直接忽略了 `model` 字段。同理 `size` 也被忽略——请求 `1024x1024` 实际拿回的是 `1254x1254` 或 `1448x1086`，甚至不满足公开 Images API「边长须为 16 的倍数」的约束。
+**A model id that does not exist still returns 200**, so the endpoint ignores
+the `model` field outright. `size` is ignored too: asking for `1024x1024` comes
+back as `1254x1254` or `1448x1086`, not even satisfying the public Images API
+rule that side lengths be multiples of 16.
 
-这也解释了为什么 `openai/codex` 主分支至今硬编码 `const IMAGE_MODEL: &str = "gpt-image-2"` 却仍然拿到 2.5 的画质：**后端已经换了，前端的标识符是过时的**。
+That also explains why `openai/codex` still hardcodes
+`const IMAGE_MODEL: &str = "gpt-image-2"` and yet delivers 2.5 quality: the
+backend changed, the frontend identifier did not.
 
-结论：想要真正在 Flare / Sunburst 之间做选择，只能用官方 API key 走 `api.openai.com`。
+**Conclusion:** choosing between Flare and Sunburst requires an official API key
+against `api.openai.com`. On the subscription channel, you get whatever the
+backend serves.
 
----
+## Requirements and limits
 
-## 合规与风险
+- Needs a ChatGPT subscription and `codex login` on the same machine.
+- This calls an **undocumented internal endpoint** that is not part of the
+  OpenAI developer documentation. It can change or disappear at any time.
+- Using subscription credentials from a non-official client **violates the
+  OpenAI terms of service**. Self-use is your own call; do not redistribute it
+  or resell access.
+- Image generation draws from a **quota pool separate from chat** (`limit_id ==
+  "image_gen"` in the Codex source).
+- Codex rotates refresh tokens. If Codex CLI refreshes at the same moment, you
+  can hit "refresh token already used" — run `codex login` once and retry.
+- Output PNGs carry C2PA metadata and an invisible watermark, same as anything
+  produced by ChatGPT or Codex.
 
-- 这里调用的是**未公开的内部端点**，不在 OpenAI 开发者文档内，随时可能变更或停用。
-- 订阅凭据用于非授权客户端**违反 OpenAI 服务条款**。自用请自行评估风险；不要用于多账号分发或转售。
-- 生图走的是**独立于对话的配额池**（`openai/codex` 源码中对应 `limit_id == "image_gen"`），与聊天额度不共用。
-- Codex 会轮换 refresh token。如果你和 Codex CLI 同时续期，可能出现「refresh token 已被使用」——此时跑一次 `codex login` 即可。
-- 输出图带有 C2PA 元数据与隐形水印，与 ChatGPT / Codex 产出一致。
+## Development
 
-## 参考实现
+```bash
+npm test          # node:test, no network, no dependencies
+npm link          # run the CLI from your working tree
+```
 
-同一套调用方式已有多个独立实现，可交叉印证：
+Layout:
 
-- [`headroomlabs-ai/headroom`](https://github.com/headroomlabs-ai/headroom) — Python
-- [`caozhiyuan/copilot-api`](https://github.com/caozhiyuan/copilot-api) — TypeScript
-- [`kittors/CliRelay`](https://github.com/kittors/CliRelay) — Go，含「model 字段被忽略」的记录
-- [`NomaDamas/CozyClay`](https://github.com/NomaDamas/CozyClay) — Node
-- [`NousResearch/hermes-agent`](https://github.com/NousResearch/hermes-agent) — Hermes，内置 `openai-codex` 生图 provider
+```
+bin/codex-img.mjs   executable entry point
+src/cli.mjs         argument parsing and command dispatch
+src/help.mjs        the command registry and all help text
+src/client.mjs      endpoint calls, base64 payloads, file writing
+src/auth.mjs        credential file, token refresh, atomic write
+src/mcp.mjs         MCP stdio server and tool schemas
+src/version.mjs     version, read from package.json
+```
 
-如果你不需要自己维护代码，**直接用 Hermes** 更省事，它已经把这套封装好了，还有 `hermes proxy` 可以把 OAuth provider 暴露成 OpenAI 兼容端点。
+CI runs the suite on Linux, macOS and Windows against Node 20, 22 and 24.
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
+
+## Related work
+
+Independent implementations of the same call, useful as cross-checks:
+
+- [`headroomlabs-ai/headroom`](https://github.com/headroomlabs-ai/headroom) — Python
+- [`caozhiyuan/copilot-api`](https://github.com/caozhiyuan/copilot-api) — TypeScript
+- [`kittors/CliRelay`](https://github.com/kittors/CliRelay) — Go, also records the "model field is ignored" finding
+- [`NomaDamas/CozyClay`](https://github.com/NomaDamas/CozyClay) — Node
+- [`NousResearch/hermes-agent`](https://github.com/NousResearch/hermes-agent) — Hermes, with a built-in `openai-codex` image provider
+
+If you would rather not maintain your own code, **Hermes** already wraps this
+and can expose OAuth providers as an OpenAI-compatible endpoint via
+`hermes proxy`.

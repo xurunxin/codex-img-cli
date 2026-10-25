@@ -8,6 +8,12 @@ codex-img-*.png
 out/
 *.tmp
 
+# editor / OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
 # never commit local credentials if anyone copies one in by accident
 auth.json
 .codex/

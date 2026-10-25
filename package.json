@@ -1,11 +1,17 @@
 {
   "name": "codex-img-cli",
-  "version": "0.1.0",
-  "description": "Image generation/editing CLI that reuses the local Codex (ChatGPT) subscription credentials.",
+  "version": "1.0.0",
+  "description": "Reuse your Codex/ChatGPT subscription to give any agent GPT-Image generation and editing, as a CLI and an MCP stdio server.",
   "type": "module",
   "license": "MIT",
   "bin": {
     "codex-img": "bin/codex-img.mjs"
+  },
+  "main": "src/cli.mjs",
+  "exports": {
+    ".": "./src/cli.mjs",
+    "./client": "./src/client.mjs",
+    "./auth": "./src/auth.mjs"
   },
   "engines": {
     "node": ">=20"
@@ -13,16 +19,36 @@
   "files": [
     "bin",
     "src",
-    "README.md"
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "prepublishOnly": "npm test"
   },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xurunxin/codex-img-cli.git"
+  },
+  "homepage": "https://github.com/xurunxin/codex-img-cli#readme",
+  "bugs": {
+    "url": "https://github.com/xurunxin/codex-img-cli/issues"
+  },
+  "author": "xurunxin",
   "keywords": [
     "codex",
     "chatgpt",
+    "gpt-image",
     "image-generation",
-    "cli",
-    "mcp"
+    "mcp",
+    "model-context-protocol",
+    "agent",
+    "ai",
+    "cli"
   ]
 }
